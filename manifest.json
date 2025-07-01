@@ -1,51 +1,50 @@
 {
-  "identifier": "jimeng-universal-image-gen-final",
-  "homepage": "http://YOUR_SERVER_IP:8001/docs",
-  "api": [
-    {
-      "name": "generate_image_api",
-      "url": "http://YOUR_SERVER_IP:8001/generate_image_api",
-      "description": "根据文本描述、参考图和指定的宽高比生成图片。默认使用即梦3.0模型。",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "prompt": {
-            "type": "string",
-            "description": "图片的文本描述。例如：'用即梦2.0pro画一只猫'"
+    "identifier": "jimeng-unified-perfect",
+    "api": [
+      {
+        "name": "generate_image_api",
+        "url": "http:/YOUIPURL:8001/generate_image_for_lobe",
+        "description": "根据文本描述生成图片。",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "description": "请详细描述您想生成的画面内容。"
+            },
+            "model": {
+              "type": "string",
+              "title": "生成模型",
+              "enum": ["jimeng-3.0", "jimeng-2.1", "jimeng-2.0-pro"],
+              "default": "jimeng-3.0"
+            },
+            "aspect_ratio": {
+              "type": "string",
+              "title": "图片比例",
+              "enum": ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"],
+              "default": "1:1"
+            }
           },
-          "aspect_ratio": {
-            "type": "string",
-            "description": "【选填】选择您想要的图片比例。",
-            "enum": [
-              "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"
-            ],
-            "default": "1:1"
-          },
-          "file_path": {
-            "type": "string",
-            "description": "【选填】参考图的URL，用于图生图功能。"
-          }
-        },
-        "required": ["prompt"]
+          "required": ["prompt"]
+        }
       }
-    }
-  ],
-  "meta": {
-    "title": "即梦全能图片生成(带比例)",
-    "description": "一个插件，同时支持文生图、图生图、模型识别和尺寸选择。兼容Dify和LobeChat。",
-    "author": "AI Assistant & You",
-    "avatar": "🎨"
-  },
-  "settings": {
-    "type": "object",
-    "properties": {
-      "session_id": {
-        "type": "string",
-        "title": "即梦 Session ID",
-        "description": "请输入您从即梦官网获取的 session_id (支持多个,用逗号分隔)"
-      }
+    ],
+    "meta": {
+      "title": "即梦图片生成(统一最终版)",
+      "description": "一个稳定可靠的即梦文生图插件，同时支持Dify和LobeChat。",
+      "author": "AI Assistant & You",
+      "avatar": "👑"
     },
-    "required": ["session_id"]
-  },
-  "version": "1.1.0"
-}
+    "settings": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "title": "即梦 Session ID",
+          "description": "请输入您从即梦官网获取的 session_id"
+        }
+      },
+      "required": ["session_id"]
+    },
+    "version": "Unified-Final-Perfect"
+  }

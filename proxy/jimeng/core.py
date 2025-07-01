@@ -25,8 +25,10 @@ PLATFORM_CODE = "7"
 DEVICE_ID = utils.generate_device_id()
 WEB_ID = utils.generate_web_id()
 USER_ID = utils.generate_uuid(False)
+
 FAKE_HEADERS = {
-    "Accept": "application/json, text/plain, */*", "Accept-Encoding": "gzip, deflate, br",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Encoding": "gzip, deflate", 
     "Accept-language": "zh-CN,zh;q=0.9", "Cache-control": "no-cache",
     "Appid": DEFAULT_ASSISTANT_ID, "Appvr": VERSION_CODE, "Origin": "https://jimeng.jianying.com",
     "Pragma": "no-cache", "Priority": "u=1, i", "Referer": "https://jimeng.jianying.com",
@@ -37,10 +39,6 @@ FAKE_HEADERS = {
 }
 
 def acquire_token(refresh_token: str) -> str:
-    """
-    获取访问token
-    - 支持多个token，用逗号分隔，会自动随机选择一个
-    """
     tokens = [t.strip() for t in refresh_token.split(',') if t.strip()]
     if not tokens:
         raise ValueError("refresh_token is empty or invalid.")
@@ -49,11 +47,26 @@ def acquire_token(refresh_token: str) -> str:
 def decompress_response(response: requests.Response) -> str:
     content = response.content
     encoding = response.headers.get('Content-Encoding', '').lower()
+
     if encoding == 'gzip':
-        buffer = BytesIO(content)
-        with gzip.GzipFile(fileobj=buffer) as f: content = f.read()
-    elif encoding == 'br': content = brotli.decompress(content)
-    return content.decode('utf-8')
+        try:
+            # --- 关键修改在这里：增加 try...except ---
+            buffer = BytesIO(content)
+            with gzip.GzipFile(fileobj=buffer) as f:
+                content = f.read()
+        except gzip.BadGzipFile:
+            # 如果解压失败，就认为它本来就是普通文本，直接使用原始数据
+            logging.warning("Received a response with 'gzip' encoding header but it was not a valid gzip file. Treating as plain text.")
+            pass # content 保持原始数据不变
+
+    elif encoding == 'br': 
+        try:
+            content = brotli.decompress(content)
+        except brotli.Error:
+            logging.warning("Received a response with 'br' encoding header but it failed to decompress. Treating as plain text.")
+            pass # content 保持原始数据不变
+
+    return content.decode('utf-8', errors='ignore')
 
 def request(
     method: str,
@@ -66,9 +79,9 @@ def request(
     **kwargs
 ) -> Dict[str, Any]:
     token = acquire_token(refresh_token)
-    
+
     full_url = uri if uri.startswith('https://') else f"https://jimeng.jianying.com{uri}"
-    
+
     _headers = {**FAKE_HEADERS, "Cookie": f"sessionid={token}; sessionid_ss={token}; sid_tt={token};"}
     if headers: 
         _headers.update(headers)
@@ -85,28 +98,24 @@ def request(
         _params.update(params)
 
     try:
-        if is_json: 
-            response = requests.request(method=method.lower(), url=full_url, params=_params, json=data, headers=_headers, timeout=30, **kwargs)
-        else: 
-            response = requests.request(method=method.lower(), url=full_url, params=_params, data=data, headers=_headers, timeout=30, **kwargs)
-        
+        response = requests.request(method=method.lower(), url=full_url, params=_params, data=data if is_json is False else None, json=data if is_json is True else None, headers=_headers, timeout=30, **kwargs)
         response.raise_for_status()
-        
+
         content_type = response.headers.get('content-type', '')
         if 'application/json' in content_type:
             result_text = decompress_response(response)
             result = json.loads(result_text)
-            
+
             ret = result.get('ret')
             if ret is not None and str(ret) != '0':
                 if str(ret) == '5000': 
                     raise API_IMAGE_GENERATION_INSUFFICIENT_POINTS(f"即梦积分可能不足: {result.get('errmsg')}")
                 raise API_REQUEST_FAILED(f"请求失败: {result.get('errmsg')} (code: {ret})")
-            
+
             return result.get('data') if 'data' in result else result
         else: 
             return {'raw_response': response}
-            
+
     except requests.exceptions.RequestException as e: 
         raise API_REQUEST_FAILED(f"网络错误: {e}")
     except json.JSONDecodeError: 
@@ -120,27 +129,27 @@ def _hmac_sha256(key: bytes, msg: str) -> bytes:
 def get_aws_v4_headers(access_key, secret_key, session_token, region, service, host, method, path, params, payload=b''):
     amz_date = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
     date_stamp = time.strftime('%Y%m%d', time.gmtime())
-    
+
     canonical_querystring = '&'.join(f"{key}={requests.utils.quote(str(val))}" for key, val in sorted(params.items()))
-    
+
     payload_hash = hashlib.sha256(payload).hexdigest()
-    
+
     canonical_headers = f'host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\nx-amz-security-token:{session_token}\n'
     signed_headers = 'host;x-amz-content-sha256;x-amz-date;x-amz-security-token'
-    
+
     canonical_request = '\n'.join([method, path, canonical_querystring, canonical_headers, signed_headers, payload_hash])
-    
+
     credential_scope = f'{date_stamp}/{region}/{service}/aws4_request'
-    
+
     string_to_sign = '\n'.join(['AWS4-HMAC-SHA256', amz_date, credential_scope, hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()])
-    
+
     k_date = _hmac_sha256(('AWS4' + secret_key).encode('utf-8'), date_stamp)
     k_region = _hmac_sha256(k_date, region)
     k_service = _hmac_sha256(k_region, service)
     k_signing = _hmac_sha256(k_service, 'aws4_request')
-    
+
     signature = hmac.new(k_signing, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
-    
+
     return {
         'Host': host, 
         'X-Amz-Date': amz_date, 

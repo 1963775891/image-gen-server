@@ -1,123 +1,111 @@
-# 描述: 兼容 Dify 和 LobeChat 的即梦图片生成API服务 (带尺寸选择功能)。
-# 作者: AI助手根据用户需求整合和创建
+# 描述: 即梦图片生成API服务 (Dify & LobeChat 统一最终版)
 
 import uvicorn
 import json
-import re
 import logging
-from fastapi import FastAPI, HTTPException, Header, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Header, Request, Depends
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, ValidationError
+from typing import Optional, Dict, Tuple
 
-# 导入我们强大的图片生成模块
 from proxy.jimeng.images import generate_images
 
-# --- FastAPI 应用设置 ---
 app = FastAPI(
-    title="即梦图片生成通用API(带比例)",
-    description="一个为 Dify 和 LobeChat 设计的，支持尺寸选择的即梦图片生成插件服务。",
-    version="1.1.0-Final-Ratio"
+    title="即梦图片生成统一API",
+    version="Unified-Final-Perfect"
 )
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
 )
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# --- 请求体模型定义 (新增 aspect_ratio) ---
 class ImageRequest(BaseModel):
-    prompt: str = Field(..., description="图片的文本描述。")
-    aspect_ratio: Optional[str] = Field("1:1", description="图片比例, 如 1:1, 16:9")
-    file_path: Optional[str] = Field(None, description="【图生图】参考图片的网络URL。")
-    model: Optional[str] = Field("jimeng-3.0", description="精确选择图片模型(可选, 默认 'jimeng-3.0')。")
+    prompt: str
+    model: Optional[str] = "jimeng-3.0"
+    aspect_ratio: Optional[str] = "1:1"
 
-
-# --- 新增：宽高比与像素尺寸的映射字典 ---
-ASPECT_RATIO_MAP = {
-    "1:1": (1024, 1024),
-    "16:9": (1664, 936),
-    "9:16": (936, 1664),
-    "4:3": (1472, 1104),
-    "3:4": (1104, 1472),
-    "3:2": (1584, 1056),
-    "2:3": (1056, 1584),
-    "21:9": (2016, 864),
-}
-
-# (find_model_in_prompt 和 get_manifest 函数保持不变, 此处省略)
-def find_model_in_prompt(prompt_text: str) -> str:
-    # ... (代码同上一版) ...
-    model_keywords = {
-        r'即梦3.0|jimeng-3.0|jimeng 3.0': 'jimeng-3.0', r'即梦2.1|jimeng-2.1|jimeng 2.1': 'jimeng-2.1',
-        r'即梦2.0pro|即梦2.0 pro|jimeng-2.0-pro': 'jimeng-2.0-pro', r'即梦2.0|jimeng-2.0|jimeng 2.0': 'jimeng-2.0',
-        r'即梦1.4|jimeng-1.4|jimeng 1.4': 'jimeng-1.4', r'即梦xlpro|即梦xl pro|jimeng-xl-pro': 'jimeng-xl-pro'
+RATIO_MAP: Dict[str, Dict[str, Tuple[int, int]]] = {
+    "jimeng-3.0": {
+        "1:1": (1328, 1328), "16:9": (1664, 936), "9:16": (936, 1664), "4:3": (1472, 1104),
+        "3:4": (1104, 1472), "3:2": (1584, 1056), "2:3": (1056, 1584), "21:9": (2016, 864),
+    },
+    "old_models": {
+        "1:1": (1360, 1360), "16:9": (1360, 765), "9:16": (765, 1360), "4:3": (1360, 1020),
+        "3:4": (1020, 1360), "3:2": (1360, 906), "2:3": (906, 1360), "21:9": (1358, 582),
     }
-    prompt_lower = prompt_text.lower()
-    for pattern, model_name in model_keywords.items():
-        if re.search(pattern, prompt_lower):
-            logging.info(f"在prompt中检测到图片模型，选用: {model_name}")
-            return model_name
-    return None
+}
+auth_scheme = HTTPBearer()
 
-@app.get("/manifest.json", include_in_schema=False)
-async def get_manifest():
-    try:
-        with open('manifest.json', 'r', encoding='utf-8') as f:
-            return JSONResponse(content=json.load(f))
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="manifest.json not found")
+def get_image_dimensions(model: str, ratio: str) -> Tuple[int, int]:
+    model_group = "jimeng-3.0" if model == "jimeng-3.0" else "old_models"
+    ratios = RATIO_MAP.get(model_group, RATIO_MAP["old_models"])
+    return ratios.get(ratio, ratios["1:1"])
 
+# --- 为 Dify 提供服务 ---
+@app.get("/openapi.json", include_in_schema=False)
+async def get_openapi_spec():
+    return FileResponse('openapi.json')
 
-# --- API端点：核心图片生成功能 (已更新) ---
-@app.post("/generate_image_api")
-async def create_image_endpoint(
-    request_body: ImageRequest,
-    x_lobe_plugin_settings: Optional[str] = Header(None),
-    authorization: Optional[str] = Header(None)
+@app.post("/generate_image_for_dify")
+async def generate_image_for_dify(
+    req_body: ImageRequest,
+    token: HTTPAuthorizationCredentials = Depends(auth_scheme)
 ):
-    # 1. 解析Token (逻辑不变)
-    token = None
-    if x_lobe_plugin_settings:
-        try: token = json.loads(x_lobe_plugin_settings).get("session_id")
-        except: pass
-    if not token and authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1]
-    if not token:
-        raise HTTPException(status_code=401, detail="无效或缺失的认证Token。")
-
-    # 2. 解析模型 (逻辑不变)
-    final_model = find_model_in_prompt(request_body.prompt) or request_body.model
-    
-    # 3. 新增：解析宽高比，获取像素尺寸
-    selected_ratio = request_body.aspect_ratio if request_body.aspect_ratio in ASPECT_RATIO_MAP else "1:1"
-    width, height = ASPECT_RATIO_MAP[selected_ratio]
-
-    logging.info(f"API收到请求: prompt='{request_body.prompt}', model='{final_model}', ratio='{selected_ratio}', size='{width}x{height}'")
-
-    # 4. 调用核心服务 (传入新的width和height)
+    width, height = get_image_dimensions(req_body.model, req_body.aspect_ratio)
+    logging.info(f"Dify工具收到请求: prompt='{req_body.prompt}', model='{req_body.model}', size='{width}x{height}'")
     try:
-        image_urls = generate_images(
-            prompt=request_body.prompt,
-            refresh_token=token,
-            model=final_model,
-            file_path=request_body.file_path,
-            width=width,
-            height=height
-        )
-        if not image_urls:
-            return Response(content="**错误**: API未能返回任何图片URL。", media_type="text/plain")
-        
-        # 5. 格式化并返回 (逻辑不变)
-        markdown_output = "\n\n".join([f"![image]({url})" for url in image_urls])
-        return Response(content=markdown_output, media_type="text/plain")
-
+        image_urls = generate_images(prompt=req_body.prompt, refresh_token=token.credentials, model=req_body.model, width=width, height=height)
+        return JSONResponse(content={"image_urls": image_urls})
     except Exception as e:
-        logging.exception(f"图片生成过程中发生错误: {e}")
-        raise HTTPException(status_code=500, detail=f"服务器内部错误: {str(e)}")
+        logging.error(f"Dify请求处理失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# --- 启动命令 ---
+# --- 为 LobeChat 提供服务 ---
+@app.get("/manifest.json", include_in_schema=False)
+async def get_lobe_manifest():
+    return FileResponse('manifest.json')
+
+@app.post("/generate_image_for_lobe")
+async def generate_image_for_lobe(
+    request: Request,
+    x_lobe_plugin_settings: Optional[str] = Header(None)
+):
+    try:
+        # --- 终极BUG修复：正确处理LobeChat的请求体 ---
+        body_json = await request.json()
+        # LobeChat的逻辑是，它会把所有参数打包成一个叫'arguments'的JSON字符串
+        # 但如果用户没有在UI上修改任何参数，它发来的body里可能就没有'arguments'
+        # 所以我们需要做一个兼容性判断
+        if 'arguments' in body_json and isinstance(body_json['arguments'], str):
+             # 如果有 'arguments'，就解析它
+            args_dict = json.loads(body_json['arguments'])
+        else:
+            # 如果没有 'arguments'，就认为整个body就是参数字典
+            args_dict = body_json
+
+        req_body = ImageRequest(**args_dict)
+
+    except (json.JSONDecodeError, ValidationError) as e:
+        raw_body = await request.body()
+        logging.error(f"LobeChat请求体解析失败: {e}, 原始Body: {raw_body.decode()}")
+        raise HTTPException(status_code=400, detail=f"请求体解析失败: {e}")
+
+    token = json.loads(x_lobe_plugin_settings).get("session_id") if x_lobe_plugin_settings else None
+    if not token:
+        raise HTTPException(status_code=401, detail="LobeChat认证头缺失")
+
+    width, height = get_image_dimensions(req_body.model, req_body.aspect_ratio)
+    logging.info(f"LobeChat插件收到请求: prompt='{req_body.prompt}', model='{req_body.model}', size='{width}x{height}'")
+    try:
+        image_urls = generate_images(prompt=req_body.prompt, refresh_token=token, model=req_body.model, width=width, height=height)
+        output = "\n\n".join([f"![image]({url})" for url in image_urls])
+        return Response(content=output, media_type="text/markdown")
+    except Exception as e:
+        logging.error(f"LobeChat请求处理失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)

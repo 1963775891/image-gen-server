@@ -3,7 +3,6 @@ aiohttp>=3.8.1
 aiofiles>=0.8.0
 requests>=2.26.0
 psutil>=5.8.0
-brotlipy>=0.7.0
 brotli==1.1.0
 
 # 图生图功能依赖

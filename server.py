@@ -18,7 +18,7 @@ from proxy.jimeng.images import generate_images
 # 请在这里填入你自己的配置
 # ######################################################################
 # 用于图片生成的即梦 session_id
-JIMENG_API_TOKEN = "在这里填入你的即梦sessionid" 
+JIMENG_API_TOKEN = "057f7addf85dxxxxxxxxxxxxx" # 你登录即梦获得的session_id，支持多个，在后面用逗号分隔 
 # ######################################################################
 
 
